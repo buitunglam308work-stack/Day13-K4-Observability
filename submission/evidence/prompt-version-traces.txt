@@ -1,0 +1,19 @@
+Prompt: day13-chat
+Trace count verified through Langfuse API on 2026-08-11: 37
+
+baseline / v1
+trace_id=c957936411f4ae5ee92681e238323ac5
+
+candidate / v2
+trace_id=8973329bd9d9ff5a3990f0ef9d75b701
+
+production promoted to v2
+trace_id=630a47ad84eef68d6d542db8225e9ac0
+
+production rolled back to v1
+trace_id=ccb4fc7992177ace07514e9346659dbd
+
+Final labels:
+- baseline = v1
+- production = v1
+- candidate = v2

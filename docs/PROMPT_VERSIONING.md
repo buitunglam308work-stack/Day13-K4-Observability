@@ -38,3 +38,24 @@ Không chấm prompt nào “hay hơn”. Điểm nằm ở khả năng truy xu�
 - Hai trace ID chứng minh hai version/label khác nhau.
 - Một ảnh trước/sau khi đổi label hoặc rollback `production`.
 - Ghi các ID và đường dẫn ảnh vào `submission/REPORT.md`.
+
+## Phiên bản của nhóm
+
+Nhóm đã tạo prompt text `day13-chat` với hai phiên bản giữ nguyên ba biến
+`feature`, `docs`, `message`:
+
+- v1 (`baseline`, `production`): trợ lý observability ngắn gọn, chỉ dùng tài
+  liệu được cung cấp và không bịa thông tin còn thiếu.
+- v2 (`candidate`): format điều tra incident theo tối đa ba bullet `finding`,
+  `evidence`, `next action`, đồng thời phải nói rõ khi evidence chưa đủ.
+
+Cùng câu hỏi “How do metrics, traces, and logs identify a latency incident?”
+đã được chạy với hai label:
+
+- `baseline` / v1: trace `c957936411f4ae5ee92681e238323ac5`.
+- `candidate` / v2: trace `8973329bd9d9ff5a3990f0ef9d75b701`.
+
+Kiểm tra rollback đã thực hiện theo thứ tự: chuyển `production` sang v2 (trace
+`630a47ad84eef68d6d542db8225e9ac0`), sau đó chuyển `production` về v1 (trace
+`ccb4fc7992177ace07514e9346659dbd`). Trạng thái cuối cùng là
+`production = v1`, `candidate = v2`, `baseline = v1`.
