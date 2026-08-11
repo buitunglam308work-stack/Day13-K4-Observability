@@ -1,0 +1,28 @@
+Challenge: day13-k4-observability-v1
+Cohort: K4
+Incident from released config: rag_slow
+Configured latency threshold: 2000 ms
+
+Metrics after 5 official requests:
+- traffic: 5
+- latency p50: 2651 ms
+- latency p95: 3835 ms
+- latency p99: 3835 ms
+- total cost: 0.0107 USD
+- tokens in/out: 362 / 644
+- error breakdown: empty
+- quality average: 0.84
+
+Representative request:
+- correlation_id: req-f4342824
+- trace_id: 2e12db77f287f04be3a61418a4e558e7
+- response latency: 3835 ms
+- prompt: day13-chat / production / v1
+
+Verified Langfuse waterfall:
+- run generation: 3835 ms
+- rag-retrieval span: 2500 ms
+- fake-llm generation: 150 ms
+
+Conclusion: retrieval accounts for the dominant observed component latency;
+the fake LLM is not the bottleneck. The incident was disabled after collection.

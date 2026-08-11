@@ -1,0 +1,21 @@
+Scenario: rag_slow (practice)
+
+Baseline, 10 response_sent events:
+- p50 latency: 150 ms
+- p95 latency: 1432 ms
+- min/max: 150 / 1432 ms
+
+Incident, 10 response_sent events:
+- p50 latency: 2650 ms
+- p95 latency: 2650 ms
+- min/max: 2650 / 2650 ms
+
+Instrumented evidence request:
+- correlation_id: req-feedface
+- trace_id: 2431a25be1b0ce83362964beb02fde58
+- total run: 3841 ms
+- rag-retrieval: 2500 ms
+- fake-llm: 151 ms
+- prompt: day13-chat / production / v1
+
+The incident was disabled after evidence collection.
