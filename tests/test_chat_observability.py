@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app import logging_config
-from app.main import agent, app
+from app.main import agent, app, health
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +30,14 @@ def post_chat(payload: dict, headers: dict[str, str] | None = None) -> httpx.Res
             return await client.post("/chat", json=payload, headers=headers)
 
     return asyncio.run(send())
+
+
+def test_health_exposes_active_llm_and_tracing_mode() -> None:
+    payload = asyncio.run(health())
+
+    assert payload["llm_provider"] == agent.provider
+    assert payload["model"] == agent.model
+    assert isinstance(payload["tracing_enabled"], bool)
 
 
 def test_chat_response_log_exposes_quality_for_dashboard(

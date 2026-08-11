@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" href="data:,">
   <title>Day 13 Observability Dashboard</title>
   <style>
     :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
@@ -28,8 +29,26 @@
     .chip { padding: 6px 8px; border: 1px solid #29415e; border-radius: 8px; background: #0a1421; color: #aec0d6; font-size: .76rem; }
     footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 20px; color: #7188a4; font-size: .78rem; }
     .error { display: none; margin-bottom: 16px; padding: 12px 14px; border: 1px solid #76313b; border-radius: 10px; color: #ff9aa6; background: #32151a; }
+    .chat-panel { margin-bottom: 18px; padding: 22px; border: 1px solid #294463; border-radius: 20px; background: linear-gradient(145deg, #10243aee, #0a1625ee); box-shadow: 0 18px 46px #0005; }
+    .chat-head { display: flex; justify-content: space-between; align-items: start; gap: 16px; margin-bottom: 16px; }
+    .chat-head h2 { margin: 0 0 6px; font-size: 1.15rem; }
+    .provider { padding: 7px 10px; border-radius: 9px; color: #9fb1c9; background: #09131f; font-size: .78rem; }
+    .provider.real { color: #55e4a9; border: 1px solid #1c6048; }
+    .provider.fake { color: #ffce70; border: 1px solid #665020; }
+    .messages { display: flex; flex-direction: column; gap: 10px; min-height: 145px; max-height: 390px; overflow-y: auto; padding: 16px; border: 1px solid #203551; border-radius: 14px; background: #07101bcc; }
+    .message { width: fit-content; max-width: min(82%, 760px); padding: 11px 13px; border-radius: 14px; line-height: 1.5; white-space: pre-wrap; }
+    .message.assistant { align-self: flex-start; color: #dfeaff; background: #142842; border-bottom-left-radius: 4px; }
+    .message.user { align-self: flex-end; color: #06150f; background: #62e7ad; border-bottom-right-radius: 4px; }
+    .message.error-message { color: #ffc1c8; background: #3a1820; }
+    .message-meta { margin-top: 7px; color: #8ea4bf; font-size: .72rem; }
+    .chat-form { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin-top: 12px; }
+    .chat-form textarea { min-height: 54px; max-height: 150px; resize: vertical; padding: 13px 14px; border: 1px solid #2a4668; border-radius: 12px; outline: none; color: #eef3ff; background: #081321; font: inherit; }
+    .chat-form textarea:focus { border-color: #56dca5; box-shadow: 0 0 0 3px #56dca51f; }
+    .chat-form button { min-width: 108px; border: 0; border-radius: 12px; padding: 0 18px; color: #06150f; background: #58e0a6; font-weight: 750; cursor: pointer; }
+    .chat-form button:disabled { cursor: wait; opacity: .55; }
+    .privacy-note { grid-column: 1 / -1; color: #7890aa; font-size: .75rem; }
     @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-    @media (max-width: 620px) { header, footer { align-items: start; flex-direction: column; } .grid { grid-template-columns: 1fr; } }
+    @media (max-width: 620px) { header, footer, .chat-head { align-items: start; flex-direction: column; } .grid { grid-template-columns: 1fr; } .chat-form { grid-template-columns: 1fr; } .chat-form button { min-height: 48px; } .message { max-width: 94%; } }
   </style>
 </head>
 <body>
@@ -41,6 +60,23 @@
       </div>
       <div class="status"><span class="dot" id="dot"></span><span id="status">Đang kết nối</span></div>
     </header>
+    <section class="chat-panel" aria-labelledby="chat-title">
+      <div class="chat-head">
+        <div>
+          <h2 id="chat-title">Chat với hệ thống AI</h2>
+          <div class="meta">Mỗi tin nhắn tạo log metrics và Langfuse trace qua backend.</div>
+        </div>
+        <div class="provider" id="provider">Đang kiểm tra backend…</div>
+      </div>
+      <div class="messages" id="messages" aria-live="polite">
+        <div class="message assistant">Chào bạn. Hãy gửi một câu hỏi để kiểm tra OpenAI, Langfuse và dashboard trong cùng một luồng.</div>
+      </div>
+      <form class="chat-form" id="chat-form">
+        <textarea id="chat-input" aria-label="Tin nhắn" placeholder="Ví dụ: Chính sách refund hoạt động thế nào?" required></textarea>
+        <button id="send-button" type="submit">Gửi</button>
+        <div class="privacy-note">API key chỉ được đọc tại backend. Preview trong log và Langfuse được mask PII.</div>
+      </form>
+    </section>
     <div class="error" id="error"></div>
     <section class="grid" id="grid" aria-live="polite"></section>
     <footer>
@@ -49,6 +85,12 @@
     </footer>
   </main>
   <script>
+    const randomId = (prefix) => `${prefix}-${globalThis.crypto?.randomUUID?.() || Date.now()}`;
+    const sessionId = sessionStorage.getItem('chat-session-id') || randomId('dashboard');
+    sessionStorage.setItem('chat-session-id', sessionId);
+    const userId = sessionStorage.getItem('chat-user-id') || randomId('user');
+    sessionStorage.setItem('chat-user-id', userId);
+    let refreshTimer;
     const format = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 }).format(value);
     const thresholdText = (threshold) => `${threshold.aggregation} ${threshold.operator === 'lte' ? '≤' : '≥'} ${format(threshold.value)}`;
     const panelHtml = (panel) => {
@@ -62,6 +104,7 @@
       </article>`;
     };
     async function refresh() {
+      window.clearTimeout(refreshTimer);
       try {
         const response = await fetch('/api/dashboard', { cache: 'no-store' });
         if (!response.ok) throw new Error(`Dashboard API returned ${response.status}`);
@@ -74,16 +117,77 @@
         document.getElementById('status').textContent = 'Live data';
         document.getElementById('dot').classList.add('live');
         document.getElementById('error').style.display = 'none';
-        window.setTimeout(refresh, data.refresh_seconds * 1000);
+        refreshTimer = window.setTimeout(refresh, data.refresh_seconds * 1000);
       } catch (error) {
         document.getElementById('status').textContent = 'Mất kết nối';
         document.getElementById('dot').classList.remove('live');
         const box = document.getElementById('error');
         box.textContent = error.message;
         box.style.display = 'block';
-        window.setTimeout(refresh, 5000);
+        refreshTimer = window.setTimeout(refresh, 5000);
       }
     }
+    function appendMessage(role, text, metadata = '') {
+      const message = document.createElement('div');
+      message.className = `message ${role}`;
+      message.textContent = text;
+      if (metadata) {
+        const meta = document.createElement('div');
+        meta.className = 'message-meta';
+        meta.textContent = metadata;
+        message.appendChild(meta);
+      }
+      const messages = document.getElementById('messages');
+      messages.appendChild(message);
+      messages.scrollTop = messages.scrollHeight;
+    }
+    async function loadBackendHealth() {
+      const provider = document.getElementById('provider');
+      try {
+        const response = await fetch('/api/backend-health', { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Backend unavailable');
+        const isReal = data.llm_provider === 'openai';
+        provider.className = `provider ${isReal ? 'real' : 'fake'}`;
+        provider.textContent = `${isReal ? 'OPENAI THẬT' : 'FAKE FALLBACK'} · ${data.model} · LANGFUSE ${data.tracing_enabled ? 'ON' : 'OFF'}`;
+      } catch (error) {
+        provider.className = 'provider fake';
+        provider.textContent = `BACKEND OFFLINE · ${error.message}`;
+      }
+    }
+    document.getElementById('chat-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const input = document.getElementById('chat-input');
+      const button = document.getElementById('send-button');
+      const message = input.value.trim();
+      if (!message) return;
+      appendMessage('user', message);
+      input.value = '';
+      button.disabled = true;
+      button.textContent = 'Đang gọi…';
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Request-ID': randomId('req') },
+          body: JSON.stringify({ user_id: userId, session_id: sessionId, feature: 'qa', message }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+        appendMessage(
+          'assistant',
+          data.answer,
+          `${data.correlation_id} · ${format(data.latency_ms)} ms · ${data.tokens_in + data.tokens_out} tokens · $${format(data.cost_usd)}`,
+        );
+        await refresh();
+      } catch (error) {
+        appendMessage('assistant error-message', `Không thể gửi: ${error.message}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = 'Gửi';
+        input.focus();
+      }
+    });
+    loadBackendHealth();
     refresh();
   </script>
 </body>

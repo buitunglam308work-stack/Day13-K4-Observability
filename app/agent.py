@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -10,7 +11,17 @@ from .mock_llm import FakeLLM
 from .mock_rag import retrieve
 from .pii import hash_user_id, summarize_text
 from .prompt_management import resolve_prompt
+from .real_llm import DEFAULT_OPENAI_MODEL, RealLLM
 from .tracing import get_langfuse_client, observe, tracing_enabled
+
+MODEL_PRICING_PER_MILLION: dict[str, tuple[float, float]] = {
+    "claude-sonnet-4-5": (3.0, 15.0),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4o-mini-2024-07-18": (0.15, 0.60),
+}
+DEFAULT_MODEL_PRICING_PER_MILLION = MODEL_PRICING_PER_MILLION[
+    "claude-sonnet-4-5"
+]
 
 
 @dataclass
@@ -26,8 +37,15 @@ class AgentResult:
 
 class LabAgent:
     def __init__(self, model: str = "claude-sonnet-4-5") -> None:
-        self.model = model
-        self.llm = FakeLLM(model=model)
+        if os.getenv("OPENAI_API_KEY"):
+            self.model = os.getenv("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL
+            self.llm = RealLLM(model=self.model)
+            self.provider = "openai"
+        else:
+            self.model = model
+            self.llm = FakeLLM(model=model)
+            self.provider = "fake"
+        self.llm_name = f"{self.provider}-llm"
 
     @observe(as_type="generation", capture_input=False, capture_output=False)
     def run(
@@ -67,7 +85,7 @@ class LabAgent:
             langfuse_client,
             "start_as_current_generation",
             enabled=enabled,
-            name="fake-llm",
+            name=self.llm_name,
             model=self.model,
         )
         with llm_context:
@@ -105,6 +123,7 @@ class LabAgent:
                 "correlation_id": correlation_id,
                 "doc_count": len(docs),
                 "query_preview": summarize_text(message),
+                "answer_preview": summarize_text(response.text),
                 "prompt_name": prompt.name,
                 "prompt_label": prompt.label,
                 "prompt_version": prompt.version,
@@ -147,8 +166,11 @@ class LabAgent:
         return factory(**kwargs)
 
     def _estimate_cost(self, tokens_in: int, tokens_out: int) -> float:
-        input_cost = (tokens_in / 1_000_000) * 3
-        output_cost = (tokens_out / 1_000_000) * 15
+        input_price, output_price = MODEL_PRICING_PER_MILLION.get(
+            self.model, DEFAULT_MODEL_PRICING_PER_MILLION
+        )
+        input_cost = (tokens_in / 1_000_000) * input_price
+        output_cost = (tokens_out / 1_000_000) * output_price
         return round(input_cost + output_cost, 6)
 
     def _heuristic_quality(self, question: str, answer: str, docs: list[str]) -> float:

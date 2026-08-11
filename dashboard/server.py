@@ -8,12 +8,45 @@ from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = Path(__file__).resolve().parent
+
+
+def proxy_backend_request(
+    api_base_url: str,
+    path: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+    request_id: str | None = None,
+) -> tuple[int, str, bytes]:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload else None
+    headers = {"Accept": "application/json"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    if request_id:
+        headers["X-Request-ID"] = request_id
+    request = Request(
+        f"{api_base_url.rstrip('/')}{path}",
+        data=body,
+        headers=headers,
+        method=method,
+    )
+    try:
+        response_context = urlopen(request, timeout=60)
+    except HTTPError as exc:
+        content_type = exc.headers.get("Content-Type", "application/json")
+        return exc.code, content_type, exc.read()
+
+    with response_context as response:
+        content_type = response.headers.get("Content-Type", "application/json")
+        return response.status, content_type, response.read()
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
@@ -171,13 +204,17 @@ def build_dashboard(config_path: Path, log_path: Path, *, now: datetime | None =
     }
 
 
-def make_handler(config_path: Path, log_path: Path):
+def make_handler(config_path: Path, log_path: Path, api_base_url: str):
     class DashboardHandler(SimpleHTTPRequestHandler):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
 
         def do_GET(self) -> None:
-            if self.path.split("?", 1)[0] != "/api/dashboard":
+            route = self.path.split("?", 1)[0]
+            if route == "/api/backend-health":
+                self._proxy_backend("/health")
+                return
+            if route != "/api/dashboard":
                 return super().do_GET()
 
             try:
@@ -190,6 +227,64 @@ def make_handler(config_path: Path, log_path: Path):
                 ).encode("utf-8")
                 self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self) -> None:
+            if self.path.split("?", 1)[0] != "/api/chat":
+                self.send_error(404)
+                return
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(content_length))
+                if not isinstance(payload, dict):
+                    raise ValueError("JSON body must be an object")
+            except (ValueError, json.JSONDecodeError) as exc:
+                body = json.dumps(
+                    {"error": "InvalidRequest", "detail": str(exc)},
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                self._send_response(400, "application/json", body)
+                return
+            self._proxy_backend(
+                "/chat",
+                method="POST",
+                payload=payload,
+                request_id=self.headers.get("X-Request-ID"),
+            )
+
+        def _proxy_backend(
+            self,
+            path: str,
+            *,
+            method: str = "GET",
+            payload: dict[str, Any] | None = None,
+            request_id: str | None = None,
+        ) -> None:
+            try:
+                status, content_type, body = proxy_backend_request(
+                    api_base_url,
+                    path,
+                    method=method,
+                    payload=payload,
+                    request_id=request_id,
+                )
+            except Exception as exc:
+                status = 502
+                content_type = "application/json"
+                body = json.dumps(
+                    {"error": "BackendUnavailable", "detail": type(exc).__name__},
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            self._send_response(status, content_type, body)
+
+        def _send_response(
+            self, status: int, content_type: str, body: bytes
+        ) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -216,12 +311,20 @@ def main() -> None:
         type=Path,
         default=Path(os.getenv("DASHBOARD_LOG_PATH", REPO_ROOT / "data/logs.jsonl")),
     )
+    parser.add_argument(
+        "--api-base-url",
+        default=os.getenv("DASHBOARD_API_BASE_URL", "http://127.0.0.1:8000"),
+    )
     args = parser.parse_args()
 
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(args.config, args.logs))
+    server = ThreadingHTTPServer(
+        (args.host, args.port),
+        make_handler(args.config, args.logs, args.api_base_url),
+    )
     print(f"Dashboard: http://{args.host}:{args.port}")
     print(f"Config: {args.config}")
     print(f"Logs: {args.logs}")
+    print(f"Backend API: {args.api_base_url}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -15,7 +15,7 @@ Kiểm tra thứ tự processor: dữ liệu phải được scrub trước khi 
 ## Khi metrics báo xấu nhưng chưa biết nguyên nhân
 
 1. Dùng metrics xác định khoảng thời gian và loại triệu chứng.
-2. Mở một trace bất thường trong khoảng đó.
+2. Mở một trace bất thường trong khoảng đó.https://github.com/buitunglam308work-stack/Day13-K4-Observability
 3. So sánh thời gian các span.
 4. Tìm log có cùng correlation ID.
 5. Chỉ kết luận khi evidence khớp ở cả ba lớp.

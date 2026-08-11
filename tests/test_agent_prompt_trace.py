@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 
 from app import agent as agent_module
+from app.mock_llm import FakeResponse, FakeUsage
 
 
 class ManagedPrompt:
@@ -50,6 +51,7 @@ class RecordingLangfuseClient:
 
 
 def test_agent_links_prompt_version_to_trace_and_generation(monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("LANGFUSE_PROMPT_NAME", "day13-chat")
     monkeypatch.setenv("LANGFUSE_PROMPT_LABEL", "production")
     monkeypatch.setattr(agent_module, "tracing_enabled", lambda: True)
@@ -57,6 +59,11 @@ def test_agent_links_prompt_version_to_trace_and_generation(monkeypatch) -> None
     monkeypatch.setattr(agent_module, "get_langfuse_client", lambda: client)
 
     agent = agent_module.LabAgent()
+    agent.llm.generate = lambda _: FakeResponse(
+        text="Send the refund to student@vinuni.edu.vn",
+        usage=FakeUsage(input_tokens=100, output_tokens=20),
+        model=agent.model,
+    )
     result = agent_module.LabAgent.run.__wrapped__(
         agent,
         user_id="student-01",
@@ -78,6 +85,9 @@ def test_agent_links_prompt_version_to_trace_and_generation(monkeypatch) -> None
     assert generation_update["prompt"] is client.prompt
     assert generation_update["metadata"]["correlation_id"] == "req-a1b2c3d4"
     assert generation_update["metadata"]["prompt_version"] == "3"
+    assert generation_update["metadata"]["answer_preview"] == (
+        "Send the refund to [REDACTED_EMAIL]"
+    )
     assert result.trace_id == "trace-123"
     assert client.observations == [
         ("span", {"name": "rag-retrieval"}),
