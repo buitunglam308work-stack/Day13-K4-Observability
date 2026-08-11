@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
+from typing import Any
 
 from . import metrics
 from .mock_llm import FakeLLM
@@ -19,6 +21,7 @@ class AgentResult:
     tokens_out: int
     cost_usd: float
     quality_score: float
+    trace_id: str | None
 
 
 class LabAgent:
@@ -27,18 +30,59 @@ class LabAgent:
         self.llm = FakeLLM(model=model)
 
     @observe(as_type="generation", capture_input=False, capture_output=False)
-    def run(self, user_id: str, feature: str, session_id: str, message: str) -> AgentResult:
+    def run(
+        self,
+        user_id: str,
+        feature: str,
+        session_id: str,
+        message: str,
+        correlation_id: str | None = None,
+    ) -> AgentResult:
         started = time.perf_counter()
-        docs = retrieve(message)
         langfuse_client = get_langfuse_client()
+        enabled = tracing_enabled()
+        get_trace_id = getattr(langfuse_client, "get_current_trace_id", None)
+        trace_id = get_trace_id() if enabled and callable(get_trace_id) else None
+
+        retrieval_context = self._observation_context(
+            langfuse_client,
+            "start_as_current_span",
+            enabled=enabled,
+            name="rag-retrieval",
+        )
+        with retrieval_context:
+            docs = retrieve(message)
+            update_span = getattr(langfuse_client, "update_current_span", None)
+            if enabled and callable(update_span):
+                update_span(metadata={"component": "retrieval", "doc_count": len(docs)})
+
         prompt = resolve_prompt(
             langfuse_client,
             feature=feature,
             docs=docs,
             message=message,
-            enabled=tracing_enabled(),
+            enabled=enabled,
         )
-        response = self.llm.generate(prompt.text)
+        llm_context = self._observation_context(
+            langfuse_client,
+            "start_as_current_generation",
+            enabled=enabled,
+            name="fake-llm",
+            model=self.model,
+        )
+        with llm_context:
+            response = self.llm.generate(prompt.text)
+            update_generation = getattr(
+                langfuse_client, "update_current_generation", None
+            )
+            if enabled and callable(update_generation):
+                update_generation(
+                    model=self.model,
+                    usage_details={
+                        "prompt_tokens": response.usage.input_tokens,
+                        "completion_tokens": response.usage.output_tokens,
+                    },
+                )
         quality_score = self._heuristic_quality(message, response.text, docs)
         latency_ms = int((time.perf_counter() - started) * 1000)
         cost_usd = self._estimate_cost(response.usage.input_tokens, response.usage.output_tokens)
@@ -48,6 +92,7 @@ class LabAgent:
             session_id=session_id,
             tags=["lab", feature, self.model],
             metadata={
+                "correlation_id": correlation_id,
                 "prompt_name": prompt.name,
                 "prompt_label": prompt.label,
                 "prompt_version": prompt.version,
@@ -57,6 +102,7 @@ class LabAgent:
         langfuse_client.update_current_generation(
             model=self.model,
             metadata={
+                "correlation_id": correlation_id,
                 "doc_count": len(docs),
                 "query_preview": summarize_text(message),
                 "prompt_name": prompt.name,
@@ -88,7 +134,17 @@ class LabAgent:
             tokens_out=response.usage.output_tokens,
             cost_usd=cost_usd,
             quality_score=quality_score,
+            trace_id=trace_id,
         )
+
+    @staticmethod
+    def _observation_context(
+        client: Any, method_name: str, *, enabled: bool, **kwargs: Any
+    ):
+        factory = getattr(client, method_name, None)
+        if not enabled or not callable(factory):
+            return nullcontext()
+        return factory(**kwargs)
 
     def _estimate_cost(self, tokens_in: int, tokens_out: int) -> float:
         input_cost = (tokens_in / 1_000_000) * 3
