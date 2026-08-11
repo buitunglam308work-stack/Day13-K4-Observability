@@ -35,6 +35,19 @@ Chi tiết thời gian và tiêu chí qua từng mốc nằm ngay trong [CHECKPO
 
 Trong lab này, Langfuse dùng cho trace và prompt versioning; nguồn chuẩn của 6 panel dashboard là `data/logs.jsonl`. Chạy Langfuse local không thay đổi dashboard contract.
 
+## Dashboard runtime để demo
+
+Sau khi API và load test đã tạo `data/logs.jsonl`, chạy dashboard local:
+
+```bash
+python dashboard/server.py
+```
+
+Mở <http://127.0.0.1:8080> để xem sáu panel latency, traffic, error, cost,
+token và quality. Dashboard đọc time range, refresh interval, đơn vị và
+threshold trực tiếp từ `config/dashboard.yaml`; hướng dẫn cấu hình chi tiết ở
+[`dashboard/README.md`](dashboard/README.md).
+
 ## 15 phút đầu
 
 1. Làm theo [SETUP.md](SETUP.md).

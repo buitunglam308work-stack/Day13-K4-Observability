@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Day 13 Observability Dashboard</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; color: #eef3ff; background: radial-gradient(circle at 10% 0, #17355c 0, #09111f 38%, #060b13 100%); }
+    main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 36px 0 48px; }
+    header { display: flex; justify-content: space-between; align-items: end; gap: 24px; margin-bottom: 26px; }
+    h1 { margin: 0 0 8px; font-size: clamp(1.7rem, 4vw, 2.8rem); letter-spacing: -.04em; }
+    .subtitle, .meta { color: #9fb1c9; }
+    .status { display: flex; align-items: center; gap: 9px; padding: 9px 13px; border: 1px solid #28415f; border-radius: 999px; background: #0d1929cc; white-space: nowrap; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #ffca5c; box-shadow: 0 0 12px currentColor; }
+    .dot.live { color: #4ae2a1; background: currentColor; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+    .panel { min-height: 205px; padding: 20px; border: 1px solid #203551; border-radius: 18px; background: linear-gradient(145deg, #101d2eeb, #0b1522e8); box-shadow: 0 18px 46px #0005; }
+    .panel-head { display: flex; justify-content: space-between; gap: 14px; align-items: start; }
+    .panel h2 { margin: 0; font-size: 1rem; font-weight: 650; color: #cbd8e9; }
+    .badge { padding: 4px 8px; border-radius: 999px; font-size: .72rem; font-weight: 700; background: #173c33; color: #57e6ab; }
+    .badge.bad { background: #45242a; color: #ff7f8f; }
+    .value { margin: 28px 0 6px; font-size: 2.5rem; font-weight: 760; letter-spacing: -.04em; }
+    .unit { margin-left: 7px; font-size: .83rem; color: #8fa4bd; letter-spacing: 0; }
+    .threshold { color: #8fa4bd; font-size: .82rem; }
+    .breakdown { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 20px; }
+    .chip { padding: 6px 8px; border: 1px solid #29415e; border-radius: 8px; background: #0a1421; color: #aec0d6; font-size: .76rem; }
+    footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 20px; color: #7188a4; font-size: .78rem; }
+    .error { display: none; margin-bottom: 16px; padding: 12px 14px; border: 1px solid #76313b; border-radius: 10px; color: #ff9aa6; background: #32151a; }
+    @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 620px) { header, footer { align-items: start; flex-direction: column; } .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1 id="title">Day 13 AI Observability</h1>
+        <div class="subtitle" id="window">Đang đọc dashboard contract…</div>
+      </div>
+      <div class="status"><span class="dot" id="dot"></span><span id="status">Đang kết nối</span></div>
+    </header>
+    <div class="error" id="error"></div>
+    <section class="grid" id="grid" aria-live="polite"></section>
+    <footer>
+      <span id="records">0 log records</span>
+      <span id="updated">Chưa cập nhật</span>
+    </footer>
+  </main>
+  <script>
+    const format = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 }).format(value);
+    const thresholdText = (threshold) => `${threshold.aggregation} ${threshold.operator === 'lte' ? '≤' : '≥'} ${format(threshold.value)}`;
+    const panelHtml = (panel) => {
+      const chips = Object.entries(panel.breakdown).map(([key, value]) =>
+        `<span class="chip">${key}: ${format(value)}</span>`).join('');
+      return `<article class="panel">
+        <div class="panel-head"><h2>${panel.title}</h2><span class="badge ${panel.healthy ? '' : 'bad'}">${panel.healthy ? 'WITHIN SLO' : 'BREACH'}</span></div>
+        <div class="value">${format(panel.primary)}<span class="unit">${panel.unit}</span></div>
+        <div class="threshold">Threshold · ${thresholdText(panel.threshold)}</div>
+        <div class="breakdown">${chips}</div>
+      </article>`;
+    };
+    async function refresh() {
+      try {
+        const response = await fetch('/api/dashboard', { cache: 'no-store' });
+        if (!response.ok) throw new Error(`Dashboard API returned ${response.status}`);
+        const data = await response.json();
+        document.getElementById('title').textContent = data.title;
+        document.getElementById('window').textContent = `Time range: ${data.time_range_minutes} phút · Refresh: ${data.refresh_seconds} giây`;
+        document.getElementById('grid').innerHTML = data.panels.map(panelHtml).join('');
+        document.getElementById('records').textContent = `${data.record_count} log records trong cửa sổ`;
+        document.getElementById('updated').textContent = `Cập nhật ${new Date(data.generated_at).toLocaleString('vi-VN')}`;
+        document.getElementById('status').textContent = 'Live data';
+        document.getElementById('dot').classList.add('live');
+        document.getElementById('error').style.display = 'none';
+        window.setTimeout(refresh, data.refresh_seconds * 1000);
+      } catch (error) {
+        document.getElementById('status').textContent = 'Mất kết nối';
+        document.getElementById('dot').classList.remove('live');
+        const box = document.getElementById('error');
+        box.textContent = error.message;
+        box.style.display = 'block';
+        window.setTimeout(refresh, 5000);
+      }
+    }
+    refresh();
+  </script>
+</body>
+</html>
